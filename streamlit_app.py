@@ -3,7 +3,7 @@ import streamlit as st
 
 import requests
 import pandas as pd
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import torch
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, ServiceContext, PromptTemplate
 
@@ -17,7 +17,7 @@ index = VectorStoreIndex()
 # Initialize tokenizer and model
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-model = AutoModelForCausalLM.from_pretrained(
+model = AutoModelForSeq2SeqLM.from_pretrained(
     model_id,
     torch_dtype=torch.bfloat16,  # Use bfloat16 for memory efficiency on compatible hardware
     device_map="auto"  # Automatically use the GPU if available
@@ -54,7 +54,31 @@ def index_data():
             index.add_document(document)
 
 # Function to generate response using Llama 3 model
+# def generate_response(user_query, context):
+#     ai_persona = """
+#     You are an AI assistant named Excelsior, created to provide accurate and engaging responses to user queries about the Marvel Comics universe.
+#     """
+
+#     prompt = f"""
+#     {ai_persona}
+#     User's query: {user_query}
+#     Relevant context: {context}
+#     Response:
+#     """
+
+#     input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
+#     outputs = model.generate(
+#         input_ids,
+#         max_new_tokens=250,
+#         eos_token_id=tokenizer.eos_token_id,
+#         do_sample=True,
+#         temperature=0.6,
+#         top_p=0.9
+#     )
+#     response = outputs[0][input_ids.shape[-1]:]
+#     return tokenizer.decode(response, skip_special_tokens=True)
 def generate_response(user_query, context):
+    
     ai_persona = """
     You are an AI assistant named Excelsior, created to provide accurate and engaging responses to user queries about the Marvel Comics universe.
     """
@@ -66,17 +90,15 @@ def generate_response(user_query, context):
     Response:
     """
 
-    input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     outputs = model.generate(
-        input_ids,
+        **inputs,
         max_new_tokens=250,
-        eos_token_id=tokenizer.eos_token_id,
-        do_sample=True,
-        temperature=0.6,
-        top_p=0.9
+        num_beams=4,
+        early_stopping=True
     )
-    response = outputs[0][input_ids.shape[-1]:]
-    return tokenizer.decode(response, skip_special_tokens=True)
+    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    return response
 
 # Streamlit app setup
 def main():
