@@ -1,1 +1,7 @@
 streamlit>=1.26.0
+requests
+llama_index
+transformers
+pandas
+numpy
+torch
