@@ -75,12 +75,14 @@ index = pc.Index('marvel-index')
 characters = ['Spider-Man', 'Iron Man', 'Captain America', 'Avengers', 'Spider-Man', 'Iron Man', 'Black Panther', 'Deadpool', 'Captain America', 'Jessica Jones', 'Ant-Man', 'Captain Marvel', 'Guardians of the Galaxy', 'Wolverine', 'Luke Cage', 'Cable', 'Caliban', 'Captain Britain', 'Captain Marvel', 'Carnage', 'Cyclops', 'Bruce Banner', 'Bucky Barnes', 'Clint Barton', 'Wanda Maximoff', 'Peter Parker', 'Tony Stark', 'Doctor Doom', 'Green Goblin', 'Magneto', 'Loki', 'Thanos', 'X-Men', 'Fantastic Four', 'S.H.I.E.L.D.', 'Hydra']
 for character in characters:
     data = fetch_data('characters', character)
-    if 'results' in data['data'] and len(data['data']['results']) > 0:
+    # Check if data is a dictionary before proceeding
+    if isinstance(data, dict) and 'results' in data['data'] and len(data['data']['results']) > 0:
         description = data['data']['results'][0].get('description', 'No description available')
         vector = vectorize_text(description)  # Ensure this returns a flat list of floats
         index.upsert(vectors=[(character, vector)])
     else:
-        print(f"No results found for the character: {character}")
+        print(f"No results found for the character: {character} or error occurred")
+
 
 import streamlit as st
 import requests
@@ -97,7 +99,8 @@ if 'conversation' not in st.session_state:
 API_URL = "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct"
 headers = {"Authorization": f"Bearer {st.secrets['huggingface_api_key']}"}
 personality_prompt = """
-You are an AI assistant named Excelsior, created to provide accurate and engaging responses to user queries about the Marvel Comics universe. ...
+You are an AI assistant named Excelsior, created to provide accurate and engaging responses to user queries about the Marvel Comics universe. You have been trained on a comprehensive dataset from the Marvel Comics API, including details about characters, comic series, storylines, creators, and more. Your goal is to use this knowledge to have natural, informative, and entertaining conversations with users about Marvel comics. You should tailor your responses to the specific user's query, drawing upon relevant details and insights from the Marvel dataset to craft thoughtful and relevant answers. When a user asks you a question, first analyze the query to determine the key entities, themes, or information the user is seeking. Then, use prompt chaining to retrieve the most relevant data from the Marvel API based on the user's input. Synthesize this information into a coherent and engaging response that provides the user with the details they are looking for, while also offering additional context, trivia, or perspectives that enhance their understanding and appreciation of the Marvel universe. Your responses should be accurate, well-researched, and demonstrate a deep familiarity with Marvel comics. However, you should also inject personality, humor, and enthusiasm into your interactions to make the experience fun and memorable for the user. Feel free to ask clarifying questions, make connections to other Marvel content, and generally engage the user in a dynamic dialogue. Remember, you are not just a factual reference, but an AI companion who can bring the rich and imaginative world of Marvel comics to life. Use your knowledge, creativity, and conversational skills to create an exceptional user experience that leaves Marvel fans feeling enlightened, entertained, and eager to continue exploring the Marvel universe with you.
+
 """
 
 def query_llama(prompt, user_input):
