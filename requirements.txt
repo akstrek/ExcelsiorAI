@@ -6,4 +6,4 @@ llama_index
 transformers
 pandas
 numpy
-tor
+torch
