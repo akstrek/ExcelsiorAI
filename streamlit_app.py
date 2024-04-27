@@ -1,125 +1,146 @@
-import streamlit as st
-
-
 import requests
-import pandas as pd
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
+import hashlib
+import time
+from transformers import AutoTokenizer, AutoModel
 import torch
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, ServiceContext, PromptTemplate
+import torch.nn.functional as F
+from pinecone import Pinecone, ServerlessSpec
+from transformers import pipeline
+import streamlit as st
+from streamlit_chat import message
 
-# Marvel API key and base URL
-API_KEY = "f1bc84446cbf13db579ecfd668c4cb24"
-BASE_URL = "http://gateway.marvel.com/v1/public/"
+# Initialize tokenizer and model from Hugging Face
+tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
+model = AutoModel.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
 
-# Initialize VectorStoreIndex
-index = VectorStoreIndex()
+# Mean Pooling - Take attention mask into account for correct averaging
+def mean_pooling(model_output, attention_mask):
+    token_embeddings = model_output[0]  # First element of model_output contains all token embeddings
+    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
-# Initialize tokenizer and model
-model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-model = AutoModelForSeq2SeqLM.from_pretrained(
-    model_id,
-    torch_dtype=torch.bfloat16,  # Use bfloat16 for memory efficiency on compatible hardware
-    device_map="auto"  # Automatically use the GPU if available
-)
-
-# Function to fetch data from the Marvel API
-@st.cache(suppress_st_warning=True)
-def fetch_data(endpoint, params):
-    response = requests.get(endpoint, params=params)
-    if response.status_code == 200:
-        return response.json()['data']['results']
-    else:
-        raise Exception(f"Error fetching data: {response.status_code} - {response.text}")
-
-# Function to index data into VectorStoreIndex
-def index_data():
-    endpoints = ["comics", "series", "stories", "events", "creators", "characters"]
-    params = {
-        "apikey": API_KEY,
-        "limit": 350  # Adjust based on your rate limit and needs
-    }
-
-    for endpoint in endpoints:
-        full_url = f"{BASE_URL}{endpoint}"
-        data = fetch_data(full_url, params)
-        df = pd.DataFrame(data)
-        for _, row in df.iterrows():
-            document = {
-                "title": row.get("title", ""),
-                "description": row.get("description", ""),
-                "resourceURI": row.get("resourceURI", ""),
-                "type": endpoint
-            }
-            index.add_document(document)
-
-# Function to generate response using Llama 3 model
-# def generate_response(user_query, context):
-#     ai_persona = """
-#     You are an AI assistant named Excelsior, created to provide accurate and engaging responses to user queries about the Marvel Comics universe.
-#     """
-
-#     prompt = f"""
-#     {ai_persona}
-#     User's query: {user_query}
-#     Relevant context: {context}
-#     Response:
-#     """
-
-#     input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
-#     outputs = model.generate(
-#         input_ids,
-#         max_new_tokens=250,
-#         eos_token_id=tokenizer.eos_token_id,
-#         do_sample=True,
-#         temperature=0.6,
-#         top_p=0.9
-#     )
-#     response = outputs[0][input_ids.shape[-1]:]
-#     return tokenizer.decode(response, skip_special_tokens=True)
-def generate_response(user_query, context):
+def vectorize_text(text):
+    # Tokenize text
+    encoded_input = tokenizer(text, padding=True, truncation=True, return_tensors='pt')
     
-    ai_persona = """
-    You are an AI assistant named Excelsior, created to provide accurate and engaging responses to user queries about the Marvel Comics universe.
-    """
+    # Compute token embeddings with model
+    with torch.no_grad():
+        model_output = model(**encoded_input)
+    
+    # Perform mean pooling to get sentence embeddings
+    sentence_embeddings = mean_pooling(model_output, encoded_input['attention_mask'])
+    
+    # Normalize embeddings
+    sentence_embeddings = F.normalize(sentence_embeddings, p=2, dim=1)
+    
+    # Convert PyTorch tensor to numpy array and then to a flat list of floats
+    return sentence_embeddings.numpy().flatten().tolist()
 
-    prompt = f"""
-    {ai_persona}
-    User's query: {user_query}
-    Relevant context: {context}
-    Response:
-    """
+# Marvel API credentials
+public_key = '24ab8115bbfc1a2c04d192da7800ca57'
+private_key = 'e74c22beef53982565622a2b234cfd080b3170c8'
+base_url = "http://gateway.marvel.com/v1/public/"
 
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=250,
-        num_beams=4,
-        early_stopping=True
+def create_hash(ts):
+    return hashlib.md5(f"{ts}{private_key}{public_key}".encode('utf-8')).hexdigest()
+
+def fetch_data(entity_type, name=None):
+    ts = str(time.time())
+    hash = create_hash(ts)
+    params = {
+        'apikey': public_key,
+        'ts': ts,
+        'hash': hash
+    }
+    if name:
+        params['name'] = name
+    response = requests.get(f"{base_url}{entity_type}", params=params)
+    return response.json() if response.status_code == 200 else response.status_code
+
+# Initialize Pinecone
+pc = Pinecone(api_key='04d933b7-adef-4b9d-b81c-cdaac01ac8e0')
+if 'marvel-index' not in pc.list_indexes().names():
+    pc.create_index(
+        name='marvel-index', 
+        dimension=384,  # Adjusted dimension to match the output of the Hugging Face model
+        metric='cosine',
+        spec=ServerlessSpec(
+            cloud='aws',
+            region='us-west-2'
+        )
     )
-    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return response
+index = pc.Index('marvel-index')
 
-# Streamlit app setup
-def main():
-    st.set_page_config(page_title="Excelsior AI", page_icon=":sparkles:")
+# Process characters and upsert vectors into Pinecone
+characters = ['Spider-Man', 'Iron Man', 'Captain America', 'Avengers', 'Spider-Man', 'Iron Man', 'Black Panther', 'Deadpool', 'Captain America', 'Jessica Jones', 'Ant-Man', 'Captain Marvel', 'Guardians of the Galaxy', 'Wolverine', 'Luke Cage', 'Cable', 'Caliban', 'Captain Britain', 'Captain Marvel', 'Carnage', 'Cyclops', 'Bruce Banner', 'Bucky Barnes', 'Clint Barton', 'Wanda Maximoff', 'Peter Parker', 'Tony Stark', 'Doctor Doom', 'Green Goblin', 'Magneto', 'Loki', 'Thanos', 'X-Men', 'Fantastic Four', 'S.H.I.E.L.D.', 'Hydra'
+]
+for character in characters:
+    data = fetch_data('characters', character)
+    if 'results' in data['data'] and len(data['data']['results']) > 0:
+        description = data['data']['results'][0].get('description', 'No description available')
+        vector = vectorize_text(description)  # Ensure this returns a flat list of floats
+        index.upsert(vectors=[(character, vector)])
+    else:
+        print(f"No results found for the character: {character}")
+        
 
-    st.title('Professor X')
-    st.caption('Get all your questions answered about the marvel universe')
+import streamlit as st
+import requests
 
-    st.sidebar.header("Excelsior AI")
-    st.sidebar.write("Excelsior AI is an intuitive, user-friendly application that harnesses the power of Retrieval-Augmented Generation and a Llama 3 LLM model to provide comprehensive, knowledgeable, and engaging answers to any question about the Marvel comics universe.")
+# Ensure conversation is initialized at the start of the script
+if 'conversation' not in st.session_state:
+    st.session_state.conversation = []
 
-    user_query = st.text_input("Ask your question here:")
-    if user_query:
-        context = index.search(user_query)
-        response = generate_response(user_query, context)
-        response_with_attribution = response + "\n\nData provided by Marvel. © 2014 Marvel"
-        st.write(response_with_attribution)
+# Initialize conversation history
+if 'conversation' not in st.session_state:
+    st.session_state.conversation = []
 
-    feedback = st.radio("Was the response helpful?", ("Yes", "No"))
-    if feedback == "No":
-        st.text_input("Please provide feedback on how we can improve:")
+# Hugging Face API setup
+API_URL = "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct"
+headers = {"Authorization": "Bearer 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"}
+personality_prompt = """
+You are an AI assistant named Excelsior, created to provide accurate and engaging responses to user queries about the Marvel Comics universe. ...
+"""
 
-if __name__ == "__main__":
-    main()
+def query_llama(prompt, user_input):
+    full_prompt = prompt + user_input
+    response = requests.post(API_URL, headers=headers, json={"inputs": full_prompt})
+    response_data = response.json()
+    if isinstance(response_data, dict):
+        generated_text = response_data.get('generated_text', '')
+        prompt_end_idx = generated_text.rfind('\n\n') + 2
+        actual_response = generated_text[prompt_end_idx:]
+        return actual_response
+    else:
+        # Log error or handle it appropriately
+        print("Error in API response:", response_data)
+        return "Sorry, I couldn't process your request."
+
+def handle_input():
+    user_input = st.session_state.user_input
+    response = query_llama(personality_prompt, user_input)
+    st.session_state.conversation.append({"role": "user", "content": user_input})
+    st.session_state.conversation.append({"role": "assistant", "content": response, "icon": "https://images.nightcafe.studio/jobs/BTssadJGpSZ40L6sSKvA/BTssadJGpSZ40L6sSKvA--1--8cr22_7.8125x.jpg?tr=w-1600"})
+    display_messages()
+
+def display_messages():
+    for msg in st.session_state.conversation:
+        if msg["role"] == "assistant":
+            st.chat_message(msg["content"], avatar=msg["icon"])
+        else:
+            st.chat_message(msg["content"], is_user=True)
+
+# Sidebar with summary about the Excelsior AI app
+st.sidebar.title("About Excelsior AI")
+st.sidebar.info("Excelsior AI is an intuitive, user-friendly application that harnesses the power of Retrieval-Augmented Generation (RAG) and a customized large language model (LLM) to provide comprehensive, knowledgeable, and engaging answers to any question about the Marvel comics universe, serving as the ultimate AI companion for Marvel fans.")
+
+# Streamlit layout
+st.title("Excelsior AI: Marvel Universe Chatbot")
+
+# Start with a greeting message if the conversation is empty
+if not st.session_state.conversation:
+    st.session_state.conversation.append({"role": "assistant", "content": "The greatest power on Earth is the power of the human brain. Ask away my fellow mutant!", "icon": "https://images.nightcafe.studio/jobs/BTssadJGpSZ40L6sSKvA/BTssadJGpSZ40L6sSKvA--1--8cr22_7.8125x.jpg?tr=w-1600"})
+    display_messages()
+
+# Chat input
+st.chat_input("Ask me anything about Marvel Comics:", key="user_input", on_submit=handle_input)

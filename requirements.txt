@@ -1,7 +1,10 @@
-streamlit>=1.26.0
+streamlit
+altair
 requests
+urllib3
 llama_index
 transformers
 pandas
 numpy
 torch
+
