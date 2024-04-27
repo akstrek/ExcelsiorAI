@@ -3,7 +3,7 @@ altair
 requests
 urllib3
 llama_index
-transformers
+transformers==2.5.1
 pandas
 numpy
 torch
