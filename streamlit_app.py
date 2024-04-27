@@ -37,8 +37,8 @@ def vectorize_text(text):
     return sentence_embeddings.numpy().flatten().tolist()
 
 # Marvel API credentials
-public_key = '24ab8115bbfc1a2c04d192da7800ca57'
-private_key = 'e74c22beef53982565622a2b234cfd080b3170c8'
+public_key = st.secrets["public_key"]
+private_key = st.secrets["private_key"]
 base_url = "http://gateway.marvel.com/v1/public/"
 
 def create_hash(ts):
@@ -58,7 +58,7 @@ def fetch_data(entity_type, name=None):
     return response.json() if response.status_code == 200 else response.status_code
 
 # Initialize Pinecone
-pc = Pinecone(api_key='04d933b7-adef-4b9d-b81c-cdaac01ac8e0')
+pc = Pinecone(api_key=st.secrets["pinecone_api_key"])
 if 'marvel-index' not in pc.list_indexes().names():
     pc.create_index(
         name='marvel-index', 
@@ -72,8 +72,7 @@ if 'marvel-index' not in pc.list_indexes().names():
 index = pc.Index('marvel-index')
 
 # Process characters and upsert vectors into Pinecone
-characters = ['Spider-Man', 'Iron Man', 'Captain America', 'Avengers', 'Spider-Man', 'Iron Man', 'Black Panther', 'Deadpool', 'Captain America', 'Jessica Jones', 'Ant-Man', 'Captain Marvel', 'Guardians of the Galaxy', 'Wolverine', 'Luke Cage', 'Cable', 'Caliban', 'Captain Britain', 'Captain Marvel', 'Carnage', 'Cyclops', 'Bruce Banner', 'Bucky Barnes', 'Clint Barton', 'Wanda Maximoff', 'Peter Parker', 'Tony Stark', 'Doctor Doom', 'Green Goblin', 'Magneto', 'Loki', 'Thanos', 'X-Men', 'Fantastic Four', 'S.H.I.E.L.D.', 'Hydra'
-]
+characters = ['Spider-Man', 'Iron Man', 'Captain America', 'Avengers', 'Spider-Man', 'Iron Man', 'Black Panther', 'Deadpool', 'Captain America', 'Jessica Jones', 'Ant-Man', 'Captain Marvel', 'Guardians of the Galaxy', 'Wolverine', 'Luke Cage', 'Cable', 'Caliban', 'Captain Britain', 'Captain Marvel', 'Carnage', 'Cyclops', 'Bruce Banner', 'Bucky Barnes', 'Clint Barton', 'Wanda Maximoff', 'Peter Parker', 'Tony Stark', 'Doctor Doom', 'Green Goblin', 'Magneto', 'Loki', 'Thanos', 'X-Men', 'Fantastic Four', 'S.H.I.E.L.D.', 'Hydra']
 for character in characters:
     data = fetch_data('characters', character)
     if 'results' in data['data'] and len(data['data']['results']) > 0:
@@ -82,7 +81,6 @@ for character in characters:
         index.upsert(vectors=[(character, vector)])
     else:
         print(f"No results found for the character: {character}")
-        
 
 import streamlit as st
 import requests
@@ -97,7 +95,7 @@ if 'conversation' not in st.session_state:
 
 # Hugging Face API setup
 API_URL = "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct"
-headers = {"Authorization": "Bearer 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"}
+headers = {"Authorization": f"Bearer {st.secrets['huggingface_api_key']}"}
 personality_prompt = """
 You are an AI assistant named Excelsior, created to provide accurate and engaging responses to user queries about the Marvel Comics universe. ...
 """
