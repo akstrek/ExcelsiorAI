@@ -7,3 +7,4 @@ transformers
 pandas
 numpy
 torch
+pinecone
